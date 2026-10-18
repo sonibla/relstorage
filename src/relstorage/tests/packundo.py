@@ -277,6 +277,41 @@ class HistoryFreeTestPack(TestPackBase):
 
         self.assertIn('D', expect_oids) # hook was called.
 
+    def test_pack_second_pack_with_stale_object_refs_added_row(self):
+        # In history-free mode, object_refs_added is kept between pack runs as a cache: a second pack only re-examines objects whose
+        # tid changed since the last pack, and for those, a stale row (with the old tid) is already present.
+
+        # _add_refs_for_oids queues, per object:  INSERT object_refs_added, DELETE object_refs_added, DELETE object_ref.
+
+        # The RowBatcher` always executes queued deletes before queued inserts, but only within a single flush;
+        # if a flush is triggered by the INSERT itself (the first of the three operations), the matching DELETE has not been
+        # queued yet, and the INSERT fails against the still-present stale row
+        #
+        # Force every single batcher operation to flush immediately, so that this lands deterministically on the first pack of a mutated
+        # object, which already has a stale object_refs_added row from the initial pack below.
+        expect_oids = self._create_initial_state()
+
+        # Establish rows in object_refs_added for all initial objects
+        self._storage.pack(None, referencesf)
+
+        # A and B get new tids; their object_refs_added rows are now stale
+        self._mutate_state(expect_oids)
+
+        packundo = self._storage._adapter.packundo
+        from relstorage.adapters.batch import RowBatcher
+        orig_row_limit = RowBatcher.row_limit
+        orig_store_batch_size = packundo.store_batch_size
+        RowBatcher.row_limit = 1
+        packundo.store_batch_size = 1
+        try:
+            # Before the fix, this raises a unique/primary-key violation
+            # on object_refs_added (e.g. sqlite3.IntegrityError or
+            # psycopg2.errors.UniqueViolation).
+            self._storage.pack(None, referencesf)
+        finally:
+            RowBatcher.row_limit = orig_row_limit
+            packundo.store_batch_size = orig_store_batch_size
+
     def test_pack_when_object_ref_moved_just_before_examine_prev_reference(self):
         # We mutate just before we examine the state for the B object.
         expect_oids = self._create_initial_state()
