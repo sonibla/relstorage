@@ -5,7 +5,12 @@
 4.3.1 (unreleased)
 ==================
 
-- Nothing changed yet.
+- Fix a packing error on history-free databases.  Packing an object
+  that had been modified since the previous pack could intermittently
+  raise a duplicate-key/unique-constraint error on
+  object_refs_added, because the internal batching of SQL
+  statements could execute the INSERT for a given OID before the
+  DELETE removing its stale row from the previous pack.
 
 
 4.3.0 (2026-05-20)
