@@ -1359,7 +1359,13 @@ class HistoryFreePackUndo(PackUndo):
         # ``array.array``; those are relatively slow to iterate.
 
         # The batcher always does deletes before inserts, which is
-        # exactly what we want.
+        # exactly what we want, but only *within a single flush*: a
+        # flush can be triggered by any individual insert_into() or
+        # delete_from() call once its row/bind/size limit is reached.
+        # So for a given zoid, its DELETE must be queued no later than
+        # its INSERT, or a flush landing exactly on the INSERT (with
+        # the DELETE not yet queued) can find a stale row still present
+        # from a previous pack run and fail with a duplicate-key error.
         # In the past, we performed all deletes and then all inserts;
         # now, things to batching, they could be interleaved, but
         # because we process OID-by-OID, that should be fine.
@@ -1385,13 +1391,6 @@ class HistoryFreePackUndo(PackUndo):
             state = self.driver.binary_column_as_state_type(state)
             row = (from_oid, tid)
 
-            store_batcher.insert_into(
-                'object_refs_added (zoid, tid)',
-                object_refs_added_schema,
-                row,
-                row,
-                size=2
-            )
             store_batcher.delete_from(
                 'object_refs_added',
                 zoid=from_oid
@@ -1399,6 +1398,13 @@ class HistoryFreePackUndo(PackUndo):
             store_batcher.delete_from(
                 'object_ref',
                 zoid=from_oid
+            )
+            store_batcher.insert_into(
+                'object_refs_added (zoid, tid)',
+                object_refs_added_schema,
+                row,
+                row,
+                size=2
             )
 
             if state:
